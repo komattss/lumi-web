@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 
 interface WeatherData {
   main: string;
@@ -36,6 +37,7 @@ export default function WeatherPage() {
   const [error, setError] = useState("");
   const [city, setCity] = useState("");
   const [searchInput, setSearchInput] = useState("");
+  const usingSupabase = isSupabaseConfigured;
 
   // Get weather by geolocation
   const getWeatherByLocation = () => {
@@ -73,6 +75,27 @@ export default function WeatherPage() {
       let url = "";
 
       if (cityName) {
+        // Try cached by city (Supabase)
+        if (usingSupabase) {
+          try {
+            const cityKey = cityName.toLowerCase();
+            const { data: cache, error: cacheErr } = await supabase
+              .from("weather_cache")
+              .select("data, updated_at, lat, lon")
+              .eq("city", cityKey)
+              .maybeSingle();
+            if (!cacheErr && cache?.data) {
+              const updatedAt = new Date(cache.updated_at).getTime();
+              const fresh = Date.now() - updatedAt < 30 * 60 * 1000; // 30 minutes
+              if (fresh) {
+                setCity((cache.data.city as string) || cityName);
+                setWeather(cache.data as WeatherData);
+                setLoading(false);
+                return;
+              }
+            }
+          } catch {}
+        }
         // Geocoding
         const geoRes = await fetch(
           `https://geocoding-api.open-meteo.com/v1/search?name=${cityName}&count=1&language=id&format=json`
@@ -122,7 +145,7 @@ export default function WeatherPage() {
 
         const desc = getWeatherDescription(current.weather_code);
 
-        setWeather({
+        const computed: WeatherData = {
           main: desc.main,
           description: desc.description,
           icon:
@@ -139,7 +162,42 @@ export default function WeatherPage() {
           pressure: Math.round(current.pressure_msl || 1013),
           city: city || "Lokasi Anda",
           country: "Indonesia",
-        });
+        };
+        setWeather(computed);
+
+        // Upsert cache in Supabase
+        if (usingSupabase) {
+          try {
+            const payload = {
+              city: (city || cityName || "").toLowerCase() || null,
+              lat: lat ?? null,
+              lon: lon ?? null,
+              data: computed as any,
+              updated_at: new Date().toISOString(),
+            };
+            if (payload.city) {
+              // upsert by city
+              await supabase
+                .rpc("upsert_weather_cache_by_city", payload)
+                .catch(async () => {
+                  // fallback: manual upsert
+                  const { data: existing } = await supabase
+                    .from("weather_cache")
+                    .select("id")
+                    .eq("city", payload.city)
+                    .maybeSingle();
+                  if (existing?.id) {
+                    await supabase
+                      .from("weather_cache")
+                      .update(payload)
+                      .eq("id", existing.id);
+                  } else {
+                    await supabase.from("weather_cache").insert(payload);
+                  }
+                });
+            }
+          } catch {}
+        }
       }
     } catch (err) {
       setError("Gagal mengambil data cuaca. Silakan coba lagi.");

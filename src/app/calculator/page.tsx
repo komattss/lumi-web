@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Calculator, Delete, RotateCcw, Copy, Check } from "lucide-react";
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
+import { supabase, isSupabaseConfigured } from "@/lib/supabase";
 
 export default function CalculatorPage() {
   const [display, setDisplay] = useState("0");
@@ -12,6 +13,37 @@ export default function CalculatorPage() {
   const [newNumber, setNewNumber] = useState(true);
   const [history, setHistory] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
+  const usingSupabase = isSupabaseConfigured;
+  const [userId, setUserId] = useState<string>("");
+
+  useEffect(() => {
+    let uid = localStorage.getItem("chatUserId");
+    if (!uid) {
+      uid = `user_${Date.now()}`;
+      localStorage.setItem("chatUserId", uid);
+    }
+    setUserId(uid);
+  }, []);
+
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!usingSupabase || !userId) return;
+      try {
+        const { data, error } = await supabase
+          .from("calc_history")
+          .select("calculation, created_at")
+          .eq("user_id", userId)
+          .order("created_at", { ascending: false })
+          .limit(10);
+        if (!error && data) {
+          setHistory(data.map((d: any) => d.calculation));
+        }
+      } catch (e) {
+        // ignore and keep local empty
+      }
+    };
+    loadHistory();
+  }, [usingSupabase, userId]);
 
   const handleNumber = (num: string) => {
     if (newNumber) {
@@ -63,13 +95,24 @@ export default function CalculatorPage() {
     }
   };
 
-  const handleEquals = () => {
+  const handleEquals = async () => {
     if (operation && previousValue !== null) {
       const currentValue = parseFloat(display);
       const result = calculate(previousValue, currentValue, operation);
 
       const calculation = `${previousValue} ${operation} ${currentValue} = ${result}`;
       setHistory([calculation, ...history.slice(0, 9)]);
+
+      if (usingSupabase && userId) {
+        try {
+          await supabase.from("calc_history").insert({
+            user_id: userId,
+            calculation,
+          });
+        } catch (e) {
+          // ignore insert error, UI already updated
+        }
+      }
 
       setDisplay(String(result));
       setPreviousValue(null);
@@ -128,8 +171,15 @@ export default function CalculatorPage() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const clearHistory = () => {
+  const clearHistory = async () => {
     setHistory([]);
+    if (usingSupabase && userId) {
+      try {
+        await supabase.from("calc_history").delete().eq("user_id", userId);
+      } catch (e) {
+        // ignore
+      }
+    }
   };
 
   const buttonClass =

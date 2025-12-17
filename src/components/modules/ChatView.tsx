@@ -35,6 +35,13 @@ export function ChatComponent() {
     setCurrentUserName,
   } = useChat(currentRoom);
 
+  // If currentRoom isn't present (e.g., Supabase UUIDs), switch to first room
+  useEffect(() => {
+    if (rooms && rooms.length > 0 && !rooms.some((r) => r.id === currentRoom)) {
+      setCurrentRoom(rooms[0].id);
+    }
+  }, [rooms, currentRoom]);
+
   const handleSendMessage = () => {
     if (inputValue.trim()) {
       sendMessage(inputValue);
@@ -50,9 +57,9 @@ export function ChatComponent() {
     }
   };
 
-  const handleCreateRoom = () => {
+  const handleCreateRoom = async () => {
     if (newRoomName.trim()) {
-      const roomId = createRoom(newRoomName);
+      const roomId = await createRoom(newRoomName);
       setCurrentRoom(roomId);
       setNewRoomName("");
       setShowRoomSettings(false);
